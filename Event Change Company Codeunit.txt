@@ -1,0 +1,157 @@
+OBJECT Codeunit 50000 Event : Copy Company
+{
+  OBJECT-PROPERTIES
+  {
+    Date=02/02/17;
+    Time=12:21:14;
+    Modified=Yes;
+    Version List=JamesCrowter;
+  }
+  PROPERTIES
+  {
+    OnRun=BEGIN
+          END;
+
+  }
+  CODE
+  {
+
+    [EventSubscriber(Table,2000000006,OnAfterInsertEvent)]
+    LOCAL PROCEDURE OnAfterInsertCompany@1000000000(VAR Rec@1000000000 : Record 2000000006;RunTrigger@1000000001 : Boolean);
+    VAR
+      JobQueueEntry@1000000002 : Record 472;
+      CRMSetup@1000000003 : Record 5330;
+    BEGIN
+      TurnOffSMTP(Rec.Name);
+      TurnOffCRM(Rec.Name);
+      TurnOffJobQueueEntries(Rec.Name);
+      TurnOffScheduledTasks(Rec.Name);
+      ChangeCompanyInfo(Rec.Name);
+      ChangeNoSeries(Rec.Name);
+    END;
+
+    LOCAL PROCEDURE TurnOffCRM@1000000001(NewCompanyName@1000000001 : Text[30]);
+    VAR
+      CRMSetup@1000000000 : Record 5330;
+    BEGIN
+      CRMSetup.CHANGECOMPANY(NewCompanyName);
+      CRMSetup.MODIFYALL("Is Enabled",FALSE);
+    END;
+
+    LOCAL PROCEDURE TurnOffSMTP@1000000010(NewCompanyName@1000000000 : Text[30]);
+    VAR
+      SMTPMailSetup@1000000001 : Record 409;
+    BEGIN
+      SMTPMailSetup.CHANGECOMPANY(NewCompanyName);
+      SMTPMailSetup.MODIFYALL("SMTP Server",'');
+    END;
+
+    PROCEDURE TurnOffJobQueueEntries@1000000002(NewCompanyName@1000000000 : Text[30]);
+    VAR
+      JobQueueEntry@1000000001 : Record 472;
+    BEGIN
+      JobQueueEntry.CHANGECOMPANY(NewCompanyName);
+      JobQueueEntry.MODIFYALL(Status,JobQueueEntry.Status::"On Hold");
+    END;
+
+    LOCAL PROCEDURE TurnOffScheduledTasks@1000000009(NewCompanyName@1000000000 : Text[30]);
+    VAR
+      ScheduledTask@1000000001 : Record 2000000175;
+    BEGIN
+      ScheduledTask.CHANGECOMPANY(NewCompanyName);
+      ScheduledTask.DELETEALL(TRUE);
+    END;
+
+    LOCAL PROCEDURE ChangeCompanyInfo@1000000003(NewCompanyName@1000000002 : Text[30]);
+    VAR
+      CurrentCompanyInformation@1000000000 : Record 2000000006;
+      NewCompanyInformation@1000000001 : Record 79;
+      CopyText1@1000000003 : TextConst 'ENU="Data At: "';
+      CopyText2@1000000004 : TextConst 'ENU=From:';
+      CopyText3@1000000005 : TextConst 'ENU=Test Company';
+    BEGIN
+      CurrentCompanyInformation.GET;
+      NewCompanyInformation.CHANGECOMPANY(COMPANYNAME);
+      NewCompanyInformation.GET;
+      NewCompanyInformation.Name := COPYSTR(CopyText1 + ' ' +
+                                            FORMAT(CURRENTDATETIME) + ' ' +
+                                            CopyText2 + ' ' +
+                                            CurrentCompanyInformation.Name,1,30);
+      NewCompanyInformation."VAT Registration No." := '';
+      NewCompanyInformation."Registration No." := '';
+      NewCompanyInformation."Registered Name" := CopyText3;
+      NewCompanyInformation.MODIFY;
+    END;
+
+    LOCAL PROCEDURE ChangeNoSeries@1000000004(NewCompanyName@1000000000 : Text[30]);
+    VAR
+      NoSeries@1000000001 : Record 308;
+    BEGIN
+      NoSeries.CHANGECOMPANY(NewCompanyName);
+      IF NoSeries.FINDSET THEN REPEAT
+        ChangeNoSeries_ChangeSeriesLines(NewCompanyName,NoSeries.Code);
+      UNTIL NoSeries.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ChangeNoSeries_ChangeSeriesLines@1000000008(NewCompanyName@1000000000 : Text[30];NoSeriesCode@1000000001 : Code[20]);
+    VAR
+      NoSeriesLine@1000000002 : Record 309;
+      TmpNoSeriesLine@1000000003 : TEMPORARY Record 309;
+    BEGIN
+      NoSeriesLine.CHANGECOMPANY(NewCompanyName);
+
+      TmpNoSeriesLine.DELETEALL;
+
+      NoSeriesLine.RESET;
+      NoSeriesLine.SETRANGE("Series Code",NoSeriesCode);
+      NoSeriesLine.SETRANGE(Open,TRUE);
+      IF NoSeriesLine.FINDSET THEN REPEAT
+        TmpNoSeriesLine.INIT;
+        TmpNoSeriesLine.TRANSFERFIELDS(NoSeriesLine);
+        TmpNoSeriesLine.INSERT;
+      UNTIL  NoSeriesLine.NEXT = 0;
+
+      NoSeriesLine.MODIFYALL(Open,FALSE);
+
+      IF TmpNoSeriesLine.FINDSET THEN REPEAT
+        ChangeNoSeries_SetupNewSeriesLine(NewCompanyName,TmpNoSeriesLine);
+      UNTIL TmpNoSeriesLine.NEXT = 0;
+    END;
+
+    LOCAL PROCEDURE ChangeNoSeries_SetupNewSeriesLine@1000000006(NewCompanyName@1000000002 : Text[30];NoSeriesLine@1000000000 : Record 309);
+    VAR
+      NewNoSeriesLine@1000000001 : Record 309;
+      TextPrefix@1000000003 : TextConst 'ENU=*TEST*';
+    BEGIN
+      NewNoSeriesLine.CHANGECOMPANY(NewCompanyName);
+
+      NewNoSeriesLine.INIT;
+      NewNoSeriesLine.TRANSFERFIELDS(NoSeriesLine,TRUE);
+      NewNoSeriesLine."Line No." := ChangeNoSeries_GetNextLineNo(NoSeriesLine."Series Code");
+      NewNoSeriesLine."Starting No." := COPYSTR(TextPrefix + NoSeriesLine."Starting No.",1,20);
+      NewNoSeriesLine."Ending No." := COPYSTR(TextPrefix + NoSeriesLine."Ending No.",1,20);
+      NewNoSeriesLine."Warning No." := COPYSTR(TextPrefix + NoSeriesLine."Warning No.",1,20);
+      NewNoSeriesLine."Last No. Used" := COPYSTR(TextPrefix + NoSeriesLine."Last No. Used",1,20);
+      NewNoSeriesLine.INSERT(TRUE);
+    END;
+
+    LOCAL PROCEDURE ChangeNoSeries_GetNextLineNo@1000000007(NoSeriesCode@1000000000 : Code[20]) NextLineNo : Integer;
+    VAR
+      NoSeriesLine@1000000001 : Record 309;
+    BEGIN
+      NoSeriesLine.RESET;
+      NoSeriesLine.SETRANGE("Series Code",NoSeriesCode);
+      IF NoSeriesLine.FINDLAST THEN
+        EXIT(NoSeriesLine."Line No." + 10000)
+      ELSE
+        EXIT(10000);
+    END;
+
+    BEGIN
+    {
+      JC : Processes to run after copycompany
+    }
+    END.
+  }
+}
+
